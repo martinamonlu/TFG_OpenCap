@@ -1,0 +1,8 @@
+.env
+__pycache__/
+*.pyc
+data/
+results/
+session_ids.json
+Problemas.txt
+opencap-processing/
