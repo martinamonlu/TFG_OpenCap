@@ -22,16 +22,20 @@ continuous biomechanical scores comparable to the clinical 0–2 scale.
 ---
 
 ## Project Structure
+```
 TFG/
-├── data/           # .mot kinematics files per subject (h01-h20, b01-b20)
-├── results/        # Output CSVs
+├── data/           # .mot kinematics files per subject (not included)
+├── results/        # Output CSVs (not included)
 └── scripts/
-├── utils.py                  # Shared functions (loading, filtering, stomp detection)
-├── 00_download_all.py        # Automatic download from OpenCap API
-├── 01_test3_analysis.py      # Test 3: Single-leg stance
-├── 02_test7_analysis.py      # Test 7: Static bipedal stance, feet together
-├── 03_test11_analysis.py     # Test 11: Walking with head turns
-└── 04_statistical_analysis.py # Mann-Whitney U, effect sizes
+    ├── utils.py                   # Shared functions (loading, filtering, stomp detection)
+    ├── 00_download_all.py         # Automatic download from OpenCap API
+    ├── trim_all.py                # Batch trimming of all subjects and tests
+    ├── 01_test3_analysis.py       # Test 3: Single-leg stance
+    ├── 02_test7_analysis.py       # Test 7: Static bipedal stance, feet together
+    ├── 03_test11_analysis.py      # Test 11: Walking with head turns
+    ├── 04_statistical_analysis.py # Mann-Whitney U, effect sizes
+    └── exceptions.json            # Manual corrections for wrong-foot stomps
+```
 
 ---
 
