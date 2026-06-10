@@ -17,10 +17,13 @@ import sys
 import os
 import numpy as np
 import pandas as pd
+
+if hasattr(sys.stdout, 'reconfigure'):
+    sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 from scipy.signal import find_peaks
 
 sys.path.append(r'C:\Users\marti\Desktop\TFG\scripts')
-from utils import ALL_SUBJECTS, SAMPLING_RATE, load_and_trim
+from utils import ALL_SUBJECTS, SAMPLING_RATE, load_trimmed
 
 RESULTS_PATH = r'C:\Users\marti\Desktop\TFG\results\resultados_globales.csv'
 FS = SAMPLING_RATE
@@ -111,17 +114,24 @@ def compute_s_mec1(m1):
 
 def compute_mec2_features(df):
     """
-    Desviación lateral RMS (residuos de regresión lineal AP→ML).
+    Desviación lateral RMS usando PCA sobre la trayectoria 2D del pelvis.
+    La dirección principal (PC1) es la dirección real de marcha,
+    independientemente de la orientación del sistema de coordenadas del lab.
+    La desviación lateral es la proyección sobre el eje perpendicular (PC2).
     Trunk ML RMS y Trunk AP RMS.
     """
-    pelvis_tz = df['pelvis_tz'].values          # AP (dirección de marcha)
-    pelvis_tx = df['pelvis_tx'].values          # ML (lateral)
+    pelvis_tz = df['pelvis_tz'].values
+    pelvis_tx = df['pelvis_tx'].values
 
-    # Regresión lineal AP→ML para extraer desviación lateral errática
-    coeffs    = np.polyfit(pelvis_tz, pelvis_tx, 1)
-    linea_rec = np.polyval(coeffs, pelvis_tz)
-    residuos  = pelvis_tx - linea_rec
-    dev_lat_rms_mm = float(np.sqrt(np.mean(residuos**2)) * 1000.0)   # m → mm
+    # PCA 2D sobre la trayectoria horizontal del pelvis
+    coords = np.column_stack([pelvis_tz, pelvis_tx])
+    coords_c = coords - coords.mean(axis=0)
+    cov = np.cov(coords_c.T)
+    eigenvalues, eigenvectors = np.linalg.eigh(cov)   # eigh garantiza orden
+    # PC1 = dirección de marcha (mayor varianza), PC2 = dirección lateral
+    pc2 = eigenvectors[:, 0]                           # menor eigenvalue → lateral
+    lateral_dev = coords_c @ pc2                       # proyección lateral (m)
+    dev_lat_rms_mm = float(np.sqrt(np.mean(lateral_dev**2)) * 1000.0)   # m → mm
 
     # Oscilación lateral y AP del tronco
     lb  = df['lumbar_bending'].values
@@ -130,7 +140,7 @@ def compute_mec2_features(df):
     trunk_ap_rms = float(np.std(lex))   # °
 
     return dict(
-        dev_lat_rms_mm = dev_lat_rms_mm,
+        dev_lat_rms_mm   = dev_lat_rms_mm,
         trunk_ml_rms_deg = trunk_ml_rms,
         trunk_ap_rms_deg = trunk_ap_rms,
     )
@@ -177,7 +187,7 @@ def analyze_subject(subject):
     Devuelve un dict con features y scores, o None si el archivo no existe.
     """
     try:
-        df = load_and_trim(subject, 'test11')
+        df = load_trimmed(subject, 'test11')
     except FileNotFoundError:
         print(f"  [SKIP] {subject}/test11: archivo no encontrado")
         return None
@@ -187,6 +197,16 @@ def analyze_subject(subject):
 
     T_total = float(df['time'].iloc[-1] - df['time'].iloc[0])
     print(f"  Duración ensayo: {T_total:.2f} s  ({len(df)} muestras)")
+
+    # Comprobar calidad de datos: rangos articulares clampeados a ±180° indican
+    # grabación corrupta (límite del modelo OpenSim)
+    for col in ['lumbar_bending', 'lumbar_extension', 'lumbar_rotation']:
+        if col in df.columns:
+            rng = float(df[col].max() - df[col].min())
+            if rng >= 179.0:
+                print(f"  [SKIP] {subject}/test11: columna '{col}' clampeada "
+                      f"(rango={rng:.1f}°) — grabación no válida")
+                return None
 
     # Detección de pasos
     step_idx, step_times, intervalos_paso = detect_steps(df)

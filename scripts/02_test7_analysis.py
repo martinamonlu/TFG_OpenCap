@@ -16,8 +16,11 @@ import os
 import numpy as np
 import pandas as pd
 
+if hasattr(sys.stdout, 'reconfigure'):
+    sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+
 sys.path.append(r'C:\Users\marti\Desktop\TFG\scripts')
-from utils import ALL_SUBJECTS, SAMPLING_RATE, load_and_trim
+from utils import ALL_SUBJECTS, SAMPLING_RATE, load_trimmed
 
 RESULTS_PATH = r'C:\Users\marti\Desktop\TFG\results\resultados_globales.csv'
 FS = SAMPLING_RATE
@@ -139,7 +142,7 @@ def analyze_subject(subject):
     Devuelve un dict con features y scores, o None si el archivo no existe.
     """
     try:
-        df = load_and_trim(subject, 'test7')
+        df = load_trimmed(subject, 'test7')
     except FileNotFoundError:
         print(f"  [SKIP] {subject}/test7: archivo no encontrado")
         return None

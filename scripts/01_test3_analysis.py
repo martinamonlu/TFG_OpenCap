@@ -18,7 +18,7 @@ import numpy as np
 import pandas as pd
 
 sys.path.append(r'C:\Users\marti\Desktop\TFG\scripts')
-from utils import ALL_SUBJECTS, SAMPLING_RATE, load_and_trim
+from utils import ALL_SUBJECTS, SAMPLING_RATE, load_trimmed
 
 RESULTS_PATH = r'C:\Users\marti\Desktop\TFG\results\resultados_globales.csv'
 FS = SAMPLING_RATE
@@ -169,7 +169,7 @@ def analyze_trial(subject, trial):
     Devuelve un dict con todas las features y scores, o None si el archivo no existe.
     """
     try:
-        df = load_and_trim(subject, trial)
+        df = load_trimmed(subject, trial)
     except FileNotFoundError:
         print(f"  [SKIP] {subject}/{trial}: archivo no encontrado")
         return None

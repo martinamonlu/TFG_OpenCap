@@ -35,10 +35,14 @@ import os
 import sys
 import pandas as pd
 
+if hasattr(sys.stdout, 'reconfigure'):
+    sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+
 # Añadir la carpeta scripts al path para poder importar utils.py
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from utils import (ALL_SUBJECTS, ALL_TESTS, DATA_ROOT,
-                   get_mot_path, load_mot, detect_stomps, trim_mot)
+                   get_mot_path, load_mot, detect_stomps, detect_stomps_tug,
+                   trim_mot)
 
 
 # =============================================================================
@@ -140,14 +144,15 @@ def process_subject(subject: str, log_rows: list):
             # Cargar
             df = load_mot(filepath)
 
-            # Detectar pisotones
-            # Mostrar plot si está activado globalmente, o si se activa en fallo
-            idx_start, idx_end = detect_stomps(
-                df,
-                plot=PLOT_ALL,
-                subject=subject,
-                test=test
-            )
+            # Detectar pisotones — el TUG (test14) usa un detector específico
+            # (sin filtro de quietud, ver utils.detect_stomps_tug)
+            is_tug = test.startswith('test14')
+            if is_tug:
+                idx_start, idx_end = detect_stomps_tug(
+                    df, subject=subject, test=test)
+            else:
+                idx_start, idx_end = detect_stomps(
+                    df, plot=PLOT_ALL, subject=subject, test=test)
 
             # Determinar el estado de la detección para el log
             time = df['time'].values
@@ -161,7 +166,8 @@ def process_subject(subject: str, log_rows: list):
                 status = 'OK'
 
             # Si la detección falló y el usuario quiere ver el plot, mostrarlo
-            if PLOT_ON_FAILURE and status != 'OK':
+            # (solo para el detector estándar; detect_stomps_tug no tiene plot)
+            if PLOT_ON_FAILURE and status != 'OK' and not is_tug:
                 print(f"  [!] Mostrando gráfica de verificación para {subject}/{test}...")
                 detect_stomps(df, plot=True, subject=subject, test=test)
 

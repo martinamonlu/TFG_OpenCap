@@ -19,6 +19,7 @@ CÓMO USARLO EN OTROS SCRIPTS:
 """
 
 import os
+import re
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -69,6 +70,10 @@ def get_mot_path(subject: str, test: str) -> str:
     La estructura de carpetas esperada es:
         DATA_ROOT / subject / OpenSimData / Kinematics / test.mot
 
+    Algunos sujetos nombran los subtests con guion ('test3-a') y otros sin él
+    ('test3a'). Para tolerar ambas convenciones, si el nombre exacto no existe
+    se prueba la variante con/sin guion antes de la letra o número final.
+
     Args:
         subject : Código del sujeto, p.ej. 'h01' o 'b03'
         test    : Nombre del test, p.ej. 'test3a' o 'test1'
@@ -77,14 +82,52 @@ def get_mot_path(subject: str, test: str) -> str:
         Ruta completa al archivo .mot
 
     Raises:
-        FileNotFoundError si el archivo no existe
+        FileNotFoundError si el archivo no existe (en ninguna variante)
     """
-    path = os.path.join(DATA_ROOT, subject, 'OpenSimData', 'Kinematics', f'{test}.mot')
+    kin_dir = os.path.join(DATA_ROOT, subject, 'OpenSimData', 'Kinematics')
+
+    # Variantes de nombre: exacto, y alternando el guion antes del sufijo final
+    variants = [test]
+    m = re.fullmatch(r'(test\d+)-([a-z\d])', test)   # con guion → sin guion
+    if m:
+        variants.append(f'{m.group(1)}{m.group(2)}')
+    m = re.fullmatch(r'(test\d+)([a-z])', test)       # sin guion → con guion
+    if m:
+        variants.append(f'{m.group(1)}-{m.group(2)}')
+
+    for name in variants:
+        path = os.path.join(kin_dir, f'{name}.mot')
+        if os.path.exists(path):
+            return path
+
+    raise FileNotFoundError(
+        f"No se encontró el archivo .mot para '{subject}' / '{test}'.\n"
+        f"  Probado: {', '.join(f'{n}.mot' for n in variants)}\n"
+        f"  en {kin_dir}"
+    )
+
+
+# Subcarpeta donde trim_all.py guarda los archivos recortados
+TRIMMED_SUBDIR = os.path.join('OpenSimData', 'Kinematics', 'trimmed')
+
+
+def get_trimmed_path(subject: str, test: str) -> str:
+    """
+    Devuelve la ruta al archivo .mot YA RECORTADO (generado por trim_all.py).
+
+    Estructura esperada:
+        DATA_ROOT / subject / OpenSimData / Kinematics / trimmed / test.mot
+
+    Raises:
+        FileNotFoundError si el archivo recortado no existe (hay que ejecutar
+        primero trim_all.py).
+    """
+    path = os.path.join(DATA_ROOT, subject, TRIMMED_SUBDIR, f'{test}.mot')
 
     if not os.path.exists(path):
         raise FileNotFoundError(
-            f"No se encontró el archivo .mot:\n  {path}\n"
-            f"  Comprueba que el sujeto '{subject}' y el test '{test}' son correctos."
+            f"No se encontró el archivo recortado:\n  {path}\n"
+            f"  Ejecuta primero 'python trim_all.py' para generar los .mot recortados."
         )
     return path
 
@@ -299,6 +342,59 @@ def detect_stomps(df: pd.DataFrame, fs: float = SAMPLING_RATE,
     return idx_start_trim, idx_end_trim
 
 
+def detect_stomps_tug(df: pd.DataFrame, fs: float = SAMPLING_RATE,
+                      subject: str = '', test: str = '') -> tuple:
+    """
+    Detección de pisotones específica para el TUG (Test 14).
+
+    En el TUG el sujeto empieza y termina SENTADO:
+        sentado → pisotón → levantarse → marcha → giro → vuelta → sentarse → pisotón
+
+    Esto hace que la heurística de quietud de detect_stomps() NO sirva:
+        - El primer pisotón ocurre al principio de la grabación, sin 1 s de
+          ventana previa para comprobar quietud.
+        - El último pisotón ocurre JUSTO al sentarse, así que en el segundo
+          previo el pelvis_ty está cambiando (bajando) → se marcaría como
+          "moviendo" y se descartaría. La quietud está DESPUÉS, no antes.
+
+    Como entre ambos pisotones el sujeto va sentado→sentado (sin caminar fuera
+    de ellos), no hay picos de tobillo espurios en los bordes, así que basta
+    con tomar el PRIMER y el ÚLTIMO pico de velocidad angular del tobillo por
+    encima del umbral, sin filtro de quietud.
+
+    Returns:
+        Tupla (idx_start_trim, idx_end_trim). Devuelve (0, len(df)-1) si se
+        detectan menos de 2 picos.
+    """
+    ankle = df['ankle_angle_l'].values
+    time  = df['time'].values
+    dt    = 1.0 / fs
+
+    d_ankle        = np.abs(np.gradient(ankle, dt))
+    d_ankle_smooth = lowpass_filter(d_ankle, cutoff=10.0, fs=fs)
+
+    peaks, _ = find_peaks(d_ankle_smooth, height=STOMP_VELOCITY_THRESHOLD,
+                          distance=int(1.0 * fs))
+
+    if len(peaks) < 2:
+        print(f"  [FALLIDO] {subject}/{test}: <2 picos de pisotón detectados "
+              f"-> usando inicio y fin del archivo")
+        return 0, len(df) - 1
+
+    idx_start, idx_end = int(peaks[0]), int(peaks[-1])
+
+    margin = int(0.3 * fs)
+    idx_start_trim = min(idx_start + margin, len(df) - 1)
+    idx_end_trim   = max(idx_end   - margin, 0)
+
+    print(f"  [OK] {subject}/{test}: "
+          f"inicio = {time[idx_start]:.2f} s -> {time[idx_start_trim]:.2f} s | "
+          f"fin = {time[idx_end]:.2f} s -> {time[idx_end_trim]:.2f} s | "
+          f"duración recortada = {time[idx_end_trim] - time[idx_start_trim]:.2f} s")
+
+    return idx_start_trim, idx_end_trim
+
+
 # =============================================================================
 # RECORTE DEL DATAFRAME
 # =============================================================================
@@ -354,3 +450,27 @@ def load_and_trim(subject: str, test: str,
     idx_start, idx_end = detect_stomps(df, plot=plot, subject=subject, test=test)
     df_trimmed = trim_mot(df, idx_start, idx_end)
     return df_trimmed
+
+
+def load_trimmed(subject: str, test: str) -> pd.DataFrame:
+    """
+    Carga el archivo .mot YA RECORTADO que generó trim_all.py.
+
+    Esta es la función que usan los scripts de análisis (01-04): el recorte
+    (detección de pisotones) se hace UNA sola vez en trim_all.py y se guarda
+    en disco; aquí solo se lee el resultado, sin volver a detectar.
+
+    Ejemplo de uso:
+        df = load_trimmed('h01', 'test3a')
+
+    Args:
+        subject : Código del sujeto, p.ej. 'h01'
+        test    : Nombre del test, p.ej. 'test3a'
+
+    Returns:
+        DataFrame recortado (tiempo ya reseteado a 0 por trim_all.py)
+
+    Raises:
+        FileNotFoundError si no existe el recortado (ejecutar trim_all.py antes)
+    """
+    return load_mot(get_trimmed_path(subject, test))

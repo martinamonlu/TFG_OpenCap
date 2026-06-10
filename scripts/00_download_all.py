@@ -35,10 +35,11 @@ SESSION_IDS_PATH = os.path.join(os.path.dirname(__file__), 'session_ids.json')
 ENV_PATH         = os.path.join(os.path.dirname(__file__), '.env')
 DATA_ROOT        = r'C:\Users\marti\Desktop\TFG\data'
 
-# Tests a descargar (sin guiones). None para descargar todos los trials.
+# Tests a descargar. None para descargar todos los trials.
 # El script busca coincidencias ignorando guiones (test3a == test3-a)
-# y siempre guarda el archivo SIN guion: test3a.mot, test3b.mot
-TRIALS = ['test3a', 'test3b', 'test7', 'test11']
+# y guarda cada archivo con el nombre especificado en TRIALS.
+# Así, test3a/test3b se guardan sin guion, mientras que test14-1/test14-2 se guardan con guion.
+TRIALS = ['test3a', 'test3b', 'test7', 'test11', 'test14-1', 'test14-2']
 
 # ── Autenticación ─────────────────────────────────────────────────────────────
 
@@ -101,8 +102,11 @@ def get_trial(trial_id, headers):
 
 def download_file(url, dest_path):
     """Descarga un archivo desde una URL y lo guarda en dest_path."""
-    with urllib.request.urlopen(url) as response, open(dest_path, 'wb') as out:
-        shutil.copyfileobj(response, out)
+    resp = requests.get(url, stream=True, timeout=60)
+    resp.raise_for_status()
+    resp.raw.decode_content = True
+    with open(dest_path, 'wb') as out:
+        shutil.copyfileobj(resp.raw, out)
 
 # ── Descarga de un sujeto ─────────────────────────────────────────────────────
 
@@ -126,15 +130,15 @@ def download_subject(subject, session_id, headers):
             continue
         available_norm[normalize(t['name'])] = t
 
-    # Lista de trials a buscar (normalizados)
+    # Lista de trials a buscar
     if TRIALS:
-        targets = [normalize(t) for t in TRIALS]
+        targets = list(TRIALS)
     else:
-        targets = list(available_norm.keys())
+        targets = [t['name'] for t in session['trials'] if t['name'] not in ('calibration', 'neutral')]
 
     # Avisar si algún trial pedido no está
     for t in targets:
-        if t not in available_norm:
+        if normalize(t) not in available_norm:
             print(f"  [AVISO] '{t}' no encontrado en la sesión — se salta")
 
     ik_folder = os.path.join(DATA_ROOT, subject, 'OpenSimData', 'Kinematics')
@@ -142,10 +146,11 @@ def download_subject(subject, session_id, headers):
 
     descargados = []
     for target in targets:
-        if target not in available_norm:
+        norm_target = normalize(target)
+        if norm_target not in available_norm:
             continue
 
-        trial_info = available_norm[target]
+        trial_info = available_norm[norm_target]
         trial_data = get_trial(trial_info['id'], headers)
         result_tags = {r['tag']: r for r in trial_data.get('results', [])}
 
@@ -153,7 +158,6 @@ def download_subject(subject, session_id, headers):
             print(f"  [AVISO] '{target}' no tiene ik_results todavía — ¿procesado?")
             continue
 
-        # Guardar siempre SIN guion
         dest = os.path.join(ik_folder, f'{target}.mot')
         if os.path.exists(dest):
             print(f"  [SKIP]  {target}.mot ya existe")
@@ -161,7 +165,13 @@ def download_subject(subject, session_id, headers):
             continue
 
         url = result_tags['ik_results']['media']
-        download_file(url, dest)
+        try:
+            download_file(url, dest)
+        except KeyboardInterrupt:
+            raise
+        except Exception as e:
+            print(f"  [ERROR] No se pudo descargar '{target}': {e}")
+            continue
         print(f"  ✓ {target}.mot")
         descargados.append(target)
 
