@@ -1,53 +1,63 @@
 """
-04_statistical_analysis.py — Escalado ×2, Score Total y estadística MW + Spearman
-===================================================================================
-Requiere en la misma carpeta results/:
-  - resultados_globales.csv     (generado por los scripts 01-03)
-  - puntuacion_fisioterapia.csv (puntuaciones clínicas del fisioterapeuta)
+06_statistical_analysis.py - Escalado x2, Score Total 0-12 y estadistica MW + Spearman
+=======================================================================================
+Requiere en results/:
+  - resultados_globales.csv     (generado por los scripts 01-05)
+  - puntuacion_fisioterapia.csv (puntuaciones clinicas del fisioterapeuta)
 
-1. Carga ambos CSV y une las puntuaciones clínicas al global
-2. Escala los scores instrumentales ×2 → escala 0–2 por test
-3. Calcula Inst_Score_Total = suma de los tres tests → escala 0–6
-4. Test de Mann-Whitney U: VIP vs. sano (mediana ± IQR, U, p, r rank-biserial)
-5. Shapiro-Wilk por grupo para justificar el test no paramétrico
-6. Correlación de Spearman entre score instrumentado y puntuación clínica
-7. Guarda resultados_globales.csv actualizado y tabla estadística en
-   results/estadistica_MW.csv
+Cada test del Mini-BESTest se puntua 0-2. Aqui se tratan los 6 SUB-ENSAYOS
+instrumentados por separado (Test 3a, 3b, 7, 11, 14-1, 14-2), cada uno escalado
+x2 a la escala clinica 0-2:
+
+  1. Carga ambos CSV y une las puntuaciones clinicas al global.
+  2. Escala cada sub-ensayo instrumental x2 -> 0-2.
+  3. Score Total = suma de los 6 sub-ensayos -> 0-12. Solo se calcula para
+     sujetos con los 6 presentes (casos completos), para que los totales sean
+     comparables entre sujetos. Se calcula tambien el total clinico 0-12.
+  4. Mann-Whitney U: VIP vs sano (mediana, IQR, U, p, r rank-biserial).
+  5. Shapiro-Wilk por grupo (justifica el test no parametrico).
+  6. Spearman entre cada score instrumentado y su puntuacion clinica, y entre
+     los totales 0-12 instrumental y clinico.
+  7. Guarda resultados_globales.csv actualizado y las tablas estadisticas.
 """
 
 import os
 import sys
 import numpy as np
 import pandas as pd
-from scipy.stats import mannwhitneyu, spearmanr, shapiro
+from scipy.stats import mannwhitneyu, spearmanr, shapiro, kruskal
 
-# Forzar UTF-8 en la consola Windows para evitar UnicodeEncodeError
 if hasattr(sys.stdout, 'reconfigure'):
     sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 
-# ── Rutas ─────────────────────────────────────────────────────────────────────
+# -- Rutas --------------------------------------------------------------------
 
 RESULTS_PATH  = r'C:\Users\marti\Desktop\TFG\results\resultados_globales.csv'
 CLINICAL_PATH = r'C:\Users\marti\Desktop\TFG\results\puntuacion_fisioterapia.csv'
 STATS_PATH    = r'C:\Users\marti\Desktop\TFG\results\estadistica_MW.csv'
 
-# Columnas instrumentales originales (escala 0–1) → nombre ×2
-INSTR_MAP = {
-    'Test3_Score': 'Inst_Test3_2',
-    'T7_Score':    'Inst_Test7_2',
-    'T11_Score':   'Inst_Test11_2',
-}
+# Los 6 sub-ensayos instrumentados: (etiqueta, col_origen, col_escalada, col_clinica)
+# col_origen vive en resultados_globales (escala 0-1); col_escalada es x2 (0-2).
+ITEMS = [
+    ('Test 3a',   'T3A_Score',   'Inst_Test3a_2',   'Clin_Test3a'),
+    ('Test 3b',   'T3B_Score',   'Inst_Test3b_2',   'Clin_Test3b'),
+    ('Test 7',    'T7_Score',    'Inst_Test7_2',    'Clin_Test7'),
+    ('Test 11',   'T11_Score',   'Inst_Test11_2',   'Clin_Test11'),
+    ('Test 14-1', 'T14_1_Score', 'Inst_Test14_1_2', 'Clin_Test14_1'),
+    ('Test 14-2', 'T14_2_Score', 'Inst_Test14_2_2', 'Clin_Test14_2'),
+]
 
 
-# ── Parsear puntuaciones clínicas ─────────────────────────────────────────────
+# -- Parsear puntuaciones clinicas --------------------------------------------
 
 def load_clinical_scores():
     """
-    Extrae Test3a, Test3b, Test7, Test11 del CSV del fisioterapeuta.
-    Índices de columna (0-based):
-      0 → sujeto  |  3 → Test3a  |  4 → Test3b  |  15 → Test7  |  20 → Test11
+    Extrae las puntuaciones clinicas (0-2) de los 6 sub-ensayos.
+    Indices de columna (0-based) en puntuacion_fisioterapia.csv:
+      0 -> sujeto | 3 -> Test3a | 4 -> Test3b | 15 -> Test7 | 20 -> Test11
+      23 -> Test14-1 | 24 -> Test14-2
     """
-    COL_SUBJ = 0; COL_T3A = 3; COL_T3B = 4; COL_T7 = 15; COL_T11 = 20
+    COL = dict(subj=0, t3a=3, t3b=4, t7=15, t11=20, t14_1=23, t14_2=24)
 
     raw = pd.read_csv(CLINICAL_PATH, sep=';', header=None,
                       dtype=str, encoding='utf-8-sig')
@@ -59,7 +69,7 @@ def load_clinical_scores():
 
     rows = []
     for _, row in raw.iterrows():
-        subj_raw = str(row.iloc[COL_SUBJ]).strip()
+        subj_raw = str(row.iloc[COL['subj']]).strip()
         if not (subj_raw.upper().startswith('B') or subj_raw.upper().startswith('H')):
             continue
         try:    num = int(subj_raw[1:])
@@ -69,32 +79,48 @@ def load_clinical_scores():
 
         subject = subj_raw.lower()
         group   = 'blind' if subject.startswith('b') else 'healthy'
-        t3a = to_float(row.iloc[COL_T3A])
-        t3b = to_float(row.iloc[COL_T3B])
-        t7  = to_float(row.iloc[COL_T7])
-        t11 = to_float(row.iloc[COL_T11])
-        avail  = [v for v in (t3a, t3b) if not np.isnan(v)]
-        t3_med = float(np.mean(avail)) if avail else np.nan
-
-        rows.append(dict(subject=subject, group=group,
-                         Clin_Test3a=t3a, Clin_Test3b=t3b,
-                         Clin_Test3_med=t3_med, Clin_Test7=t7, Clin_Test11=t11))
+        rows.append(dict(
+            subject=subject, group=group,
+            Clin_Test3a   = to_float(row.iloc[COL['t3a']]),
+            Clin_Test3b   = to_float(row.iloc[COL['t3b']]),
+            Clin_Test7    = to_float(row.iloc[COL['t7']]),
+            Clin_Test11   = to_float(row.iloc[COL['t11']]),
+            Clin_Test14_1 = to_float(row.iloc[COL['t14_1']]),
+            Clin_Test14_2 = to_float(row.iloc[COL['t14_2']]),
+        ))
 
     return pd.DataFrame(rows)
 
 
-# ── Escalar instrumentales ×2 y calcular Score Total ─────────────────────────
+# -- Escalar instrumentales x2 y calcular totales 0-12 ------------------------
 
-def scale_instrumental(df):
-    """Añade columnas Inst_*_2 (escala 0–2) e Inst_Score_Total (0–6)."""
-    for col_src, col_dst in INSTR_MAP.items():
-        df[col_dst] = df[col_src] * 2.0 if col_src in df.columns else np.nan
-    score_cols = list(INSTR_MAP.values())
-    df['Inst_Score_Total'] = df[score_cols].sum(axis=1, min_count=1)
+def build_scores(df):
+    """
+    Anade las columnas escaladas Inst_*_2 (0-2) de cada sub-ensayo y los dos
+    totales 0-12 (instrumental y clinico) con regla de CASOS COMPLETOS: el
+    total es NaN si al sujeto le falta cualquiera de los 6 sub-ensayos.
+    """
+    inst_scaled = []
+    for _, src, scaled, _clin in ITEMS:
+        df[scaled] = df[src] * 2.0 if src in df.columns else np.nan
+        inst_scaled.append(scaled)
+
+    clin_cols = [it[3] for it in ITEMS]
+
+    def total_casos_completos(cols):
+        presentes = [c for c in cols if c in df.columns]
+        if len(presentes) < len(cols):
+            return pd.Series(np.nan, index=df.index)
+        completo = df[presentes].notna().all(axis=1)
+        return pd.Series(np.where(completo, df[presentes].sum(axis=1), np.nan),
+                         index=df.index)
+
+    df['Inst_Score_Total'] = total_casos_completos(inst_scaled)
+    df['Clin_Score_Total'] = total_casos_completos(clin_cols)
     return df
 
 
-# ── Mann-Whitney U ────────────────────────────────────────────────────────────
+# -- Mann-Whitney U -----------------------------------------------------------
 
 def rank_biserial(u, n1, n2):
     denom = n1 * n2
@@ -102,10 +128,7 @@ def rank_biserial(u, n1, n2):
 
 
 def mw_test(df, col, group_col='group', g1='blind', g2='healthy'):
-    """
-    Mann-Whitney U bilateral entre dos grupos.
-    Devuelve mediana, IQR, U, p y rank-biserial r.
-    """
+    """Mann-Whitney U bilateral. Devuelve mediana, IQR, U, p y rank-biserial r."""
     a = df.loc[df[group_col] == g1, col].dropna().values
     b = df.loc[df[group_col] == g2, col].dropna().values
 
@@ -122,163 +145,203 @@ def mw_test(df, col, group_col='group', g1='blind', g2='healthy'):
         return float(np.percentile(x, 75) - np.percentile(x, 25))
 
     return dict(
-        med_blind   = float(np.median(a)),
-        iqr_blind   = iqr(a),
-        n_blind     = int(len(a)),
-        med_healthy = float(np.median(b)),
-        iqr_healthy = iqr(b),
-        n_healthy   = int(len(b)),
-        U           = float(stat),
-        p           = float(p),
-        r           = float(r),
-        sig         = ('***' if p < 0.001 else
-                       '**'  if p < 0.01  else
-                       '*'   if p < 0.05  else 'ns'),
+        med_blind   = float(np.median(a)), iqr_blind = iqr(a), n_blind = int(len(a)),
+        med_healthy = float(np.median(b)), iqr_healthy = iqr(b), n_healthy = int(len(b)),
+        U = float(stat), p = float(p), r = float(r),
+        sig = ('***' if p < 0.001 else '**' if p < 0.01 else '*' if p < 0.05 else 'ns'),
     )
 
 
-# ── Shapiro-Wilk ──────────────────────────────────────────────────────────────
+# -- Shapiro-Wilk -------------------------------------------------------------
 
 def shapiro_test(df, col, group_col='group', g1='blind', g2='healthy'):
-    """Shapiro-Wilk por grupo. Devuelve p-valores (NaN si n < 3 o n > 5000)."""
+    """Shapiro-Wilk por grupo. p-valor NaN si n < 3 o n > 5000."""
     result = {}
-    for label, grp in [(g1, g1), (g2, g2)]:
+    for grp in (g1, g2):
         x = df.loc[df[group_col] == grp, col].dropna().values
         if 3 <= len(x) <= 5000:
             _, p = shapiro(x)
-            result[f'sw_p_{label}'] = float(p)
+            result[f'sw_p_{grp}'] = float(p)
         else:
-            result[f'sw_p_{label}'] = np.nan
+            result[f'sw_p_{grp}'] = np.nan
     return result
 
 
-# ── Spearman ──────────────────────────────────────────────────────────────────
+# -- Spearman -----------------------------------------------------------------
 
 def spearman_test(df, col_inst, col_clin):
-    """Correlación de Spearman entre score instrumentado y puntuación clínica."""
+    """Spearman entre score instrumentado y puntuacion clinica."""
     merged = df[[col_inst, col_clin]].dropna()
     if len(merged) < 5:
         return dict(rho=np.nan, p=np.nan, n=len(merged), sig='', note='n insuficiente')
     if merged[col_clin].std() == 0:
         return dict(rho=np.nan, p=np.nan, n=len(merged), sig='',
-                    note='Puntuacion clinica constante — Spearman no calculable')
+                    note='Puntuacion clinica constante - Spearman no calculable')
     rho, p = spearmanr(merged[col_inst], merged[col_clin])
     return dict(
-        rho  = float(rho),
-        p    = float(p),
-        n    = int(len(merged)),
-        sig  = ('***' if p < 0.001 else
-                '**'  if p < 0.01  else
-                '*'   if p < 0.05  else 'ns'),
-        note = '',
+        rho=float(rho), p=float(p), n=int(len(merged)),
+        sig=('***' if p < 0.001 else '**' if p < 0.01 else '*' if p < 0.05 else 'ns'),
+        note='',
     )
 
 
-# ── Main ──────────────────────────────────────────────────────────────────────
+# -- Analisis de 3 grupos: Kruskal-Wallis + post-hoc --------------------------
+# Grupos: control (h01-h20), ciego (b01-b10), ojos_cerrados (b11-b20).
+# El grupo de 20 "invidentes" del analisis de 2 grupos se desglosa aqui en
+# ciegos reales (privacion visual permanente) y videntes con ojos cerrados
+# (privacion visual simulada).
+
+def asignar_grupo3(subject):
+    s = str(subject).lower()
+    if s.startswith('h'):
+        return 'control'
+    try:
+        n = int(s[1:])
+    except ValueError:
+        return ''
+    return 'ciego' if 1 <= n <= 10 else 'ojos_cerrados'
+
+
+GRUPOS3 = ['ciego', 'ojos_cerrados', 'control']
+
+
+def kw_test(df, col, group_col='group3'):
+    """
+    Kruskal-Wallis entre los 3 grupos. Devuelve medianas, n, H, p y el tamano
+    del efecto epsilon^2 = H/(N-1).
+    """
+    samples = [df.loc[df[group_col] == g, col].dropna().values for g in GRUPOS3]
+    ns = [int(len(s)) for s in samples]
+    out = dict(n_ciego=ns[0], n_ojos=ns[1], n_control=ns[2],
+               med_ciego=np.nan, med_ojos=np.nan, med_control=np.nan,
+               H=np.nan, p=np.nan, eps2=np.nan, sig='')
+    if any(n < 2 for n in ns):
+        return out
+    try:
+        H, p = kruskal(*samples)
+    except ValueError:   # todos los valores identicos (p.ej. clinica constante)
+        return out
+    N = sum(ns)
+    out.update(med_ciego=float(np.median(samples[0])),
+               med_ojos=float(np.median(samples[1])),
+               med_control=float(np.median(samples[2])),
+               H=float(H), p=float(p), eps2=float(H / (N - 1)),
+               sig=('***' if p < 0.001 else '**' if p < 0.01 else
+                    '*' if p < 0.05 else 'ns'))
+    return out
+
+
+def posthoc_pares(df, col, group_col='group3'):
+    """
+    Post-hoc por pares (Mann-Whitney) con correccion de Bonferroni (3 pares).
+    Devuelve dict {par: p_ajustado}.
+    """
+    pares = [('ciego', 'control'), ('ojos_cerrados', 'control'),
+             ('ciego', 'ojos_cerrados')]
+    res = {}
+    for g1, g2 in pares:
+        a = df.loc[df[group_col] == g1, col].dropna().values
+        b = df.loc[df[group_col] == g2, col].dropna().values
+        if len(a) < 2 or len(b) < 2:
+            res[f'{g1}_vs_{g2}'] = np.nan
+            continue
+        _, p = mannwhitneyu(a, b, alternative='two-sided')
+        res[f'{g1}_vs_{g2}'] = float(min(p * 3.0, 1.0))
+    return res
+
+
+# -- Main ---------------------------------------------------------------------
 
 def main():
-    # --- a) Cargar puntuaciones clínicas ---
     if not os.path.exists(CLINICAL_PATH):
-        print(f"[ERROR] No se encontró {CLINICAL_PATH}")
+        print(f"[ERROR] No se encontro {CLINICAL_PATH}")
         print("        Coloca puntuacion_fisioterapia.csv en la carpeta results/")
         return
 
     df_clin = load_clinical_scores()
-    print(f"✓ Puntuaciones clínicas cargadas: {len(df_clin)} sujetos "
+    print(f"[OK] Puntuaciones clinicas cargadas: {len(df_clin)} sujetos "
           f"({(df_clin.group == 'blind').sum()} VIP, "
           f"{(df_clin.group == 'healthy').sum()} sanos)")
 
-    # --- b) Cargar resultados instrumentales ---
     if not os.path.exists(RESULTS_PATH):
-        print(f"\n[ERROR] No se encontró {RESULTS_PATH}")
-        print("        Ejecuta primero 01_test3_analysis.py, "
-              "02_test7_analysis.py y 03_test11_analysis.py")
+        print(f"\n[ERROR] No se encontro {RESULTS_PATH}")
+        print("        Ejecuta primero los scripts 01-04 de analisis")
         return
 
     df_g = pd.read_csv(RESULTS_PATH, sep=';', decimal=',')
-    print(f"✓ resultados_globales.csv cargado: {len(df_g)} sujetos")
+    print(f"[OK] resultados_globales.csv cargado: {len(df_g)} sujetos")
 
-    # --- c) Limpiar columnas previas de este script ---
+    # Limpiar columnas previas de este script
     drop = [c for c in df_g.columns if c.startswith('Clin_') or c.startswith('Inst_')]
     df_g = df_g.drop(columns=drop, errors='ignore')
 
-    # --- d) Unir puntuaciones clínicas y escalar ---
+    # Unir clinicas y construir scores
     df_g = df_g.merge(df_clin.drop(columns='group'), on='subject', how='left')
-    df_g = scale_instrumental(df_g)
+    df_g = build_scores(df_g)
 
-    # --- e) Guardar CSV actualizado ---
     os.makedirs(os.path.dirname(RESULTS_PATH), exist_ok=True)
     df_g.to_csv(RESULTS_PATH, index=False, sep=';', decimal=',')
-    print(f"✓ resultados_globales.csv actualizado → {RESULTS_PATH}")
+    print(f"[OK] resultados_globales.csv actualizado")
 
-    # ── tests_info: (etiqueta, col_clin, col_inst) ────────────────────────────
-    # col_clin se usa para Mann-Whitney clínico y para Spearman vs instrumental
-    tests_info = [
-        ('Test 3a',   'Clin_Test3a',    None),
-        ('Test 3b',   'Clin_Test3b',    None),
-        ('Test 3',    'Clin_Test3_med', 'Inst_Test3_2'),
-        ('Test 7',    'Clin_Test7',     'Inst_Test7_2'),
-        ('Test 11',   'Clin_Test11',    'Inst_Test11_2'),
-        ('Total 0-6', None,             'Inst_Score_Total'),
-    ]
+    n_inst_compl = int(df_g['Inst_Score_Total'].notna().sum())
+    n_clin_compl = int(df_g['Clin_Score_Total'].notna().sum())
+    print(f"     Casos completos para el Total 0-12: "
+          f"{n_inst_compl} instrumental, {n_clin_compl} clinico")
 
-    # ── Cabecera Mann-Whitney ─────────────────────────────────────────────────
-    hdr_mw = (f"{'Test':<12} {'Tipo':<14} "
-              f"{'n VIP':>6} {'Med VIP':>9} {'IQR VIP':>9}  "
-              f"{'n Sano':>6} {'Med Sano':>9} {'IQR Sano':>9}  "
-              f"{'U':>7} {'p':>8} {'r':>6}  {'sig':>3}")
-    sep = '─' * len(hdr_mw)
+    # (etiqueta, col_clinica, col_instrumental) para Mann-Whitney
+    mw_info = [(lab, clin, scaled) for lab, _src, scaled, clin in ITEMS]
+    mw_info.append(('Total 0-12', 'Clin_Score_Total', 'Inst_Score_Total'))
 
-    print(f"\n{'═'*len(hdr_mw)}")
-    print("MANN-WHITNEY U  —  VIP vs. Control")
-    print(f"{'═'*len(hdr_mw)}\n{hdr_mw}\n{sep}")
+    # -- Cabecera Mann-Whitney -------------------------------------------------
+    hdr = (f"{'Test':<12} {'Tipo':<14} "
+           f"{'n VIP':>6} {'Med VIP':>9} {'IQR VIP':>9}  "
+           f"{'n Sano':>6} {'Med Sano':>9} {'IQR Sano':>9}  "
+           f"{'U':>7} {'p':>8} {'r':>6}  {'sig':>3}")
+    sep = '-' * len(hdr)
+
+    print(f"\n{'='*len(hdr)}")
+    print("MANN-WHITNEY U  -  VIP vs Control")
+    print(f"{'='*len(hdr)}\n{hdr}\n{sep}")
 
     stat_rows = []
 
     def fmt(x, fs='.3f'):
-        return format(x, fs) if (x is not None and not np.isnan(x)) else '   —  '
+        return format(x, fs) if (x is not None and not np.isnan(x)) else '   -  '
 
-    for label, col_clin, col_inst in tests_info:
+    for label, col_clin, col_inst in mw_info:
         for tipo, col in [('Clinico', col_clin), ('Instrumental', col_inst)]:
             if col is None or col not in df_g.columns:
                 continue
-
             res = mw_test(df_g, col)
             sw  = shapiro_test(df_g, col)
-
             print(
                 f"{label:<12} {tipo:<14} "
                 f"{res['n_blind']:>6} {fmt(res['med_blind']):>9} {fmt(res['iqr_blind']):>9}  "
                 f"{res['n_healthy']:>6} {fmt(res['med_healthy']):>9} {fmt(res['iqr_healthy']):>9}  "
                 f"{fmt(res['U'],'.1f'):>7} {fmt(res['p'],'.4f'):>8} {fmt(res['r']):>6}  "
                 f"{res['sig']:>3}"
-                f"   [SW: VIP p={fmt(sw['sw_p_blind'],'.3f')} "
+                f"   [SW VIP p={fmt(sw['sw_p_blind'],'.3f')} "
                 f"Sano p={fmt(sw['sw_p_healthy'],'.3f')}]"
             )
-
             stat_rows.append(dict(Test=label, Tipo=tipo, Columna=col,
                                   **{k: res[k] for k in res if k != 'sig'},
-                                  Sig_MW=res['sig'],
-                                  **sw))
+                                  Sig_MW=res['sig'], **sw))
 
     print(sep)
-    print("ns p≥0.05  * p<0.05  ** p<0.01  *** p<0.001  |  "
+    print("ns p>=0.05  * p<0.05  ** p<0.01  *** p<0.001  |  "
           "r rank-biserial: |r|>0.3 medio, |r|>0.5 grande")
-    print("SW: Shapiro-Wilk (p<0.05 → rechaza normalidad → MW justificado)\n")
+    print("SW: Shapiro-Wilk (p<0.05 -> rechaza normalidad -> MW justificado)\n")
 
-    # ── Spearman: instrumental vs. clínico ────────────────────────────────────
-    spearman_pairs = [
-        ('Test 3',  'Inst_Test3_2',  'Clin_Test3_med'),
-        ('Test 7',  'Inst_Test7_2',  'Clin_Test7'),
-        ('Test 11', 'Inst_Test11_2', 'Clin_Test11'),
-    ]
+    # -- Spearman: instrumental vs clinico -------------------------------------
+    spearman_pairs = [(lab, scaled, clin) for lab, _src, scaled, clin in ITEMS]
+    spearman_pairs.append(('Total 0-12', 'Inst_Score_Total', 'Clin_Score_Total'))
 
-    hdr_sp = (f"{'Test':<12} {'n':>5} {'rho':>7} {'p':>8}  {'sig':>3}  {'Nota'}")
-    sep_sp = '─' * 55
+    hdr_sp = f"{'Test':<12} {'n':>5} {'rho':>7} {'p':>8}  {'sig':>3}  {'Nota'}"
+    sep_sp = '-' * 60
 
-    print(f"{'═'*55}")
-    print("SPEARMAN  —  Score instrumentado vs. puntuación clínica")
-    print(f"{'═'*55}\n{hdr_sp}\n{sep_sp}")
+    print(f"{'='*60}")
+    print("SPEARMAN  -  Score instrumentado vs puntuacion clinica")
+    print(f"{'='*60}\n{hdr_sp}\n{sep_sp}")
 
     spearman_rows = []
     for label, col_inst, col_clin in spearman_pairs:
@@ -291,23 +354,60 @@ def main():
                                   Col_Clin=col_clin, **sp))
 
     print(sep_sp)
-    print("rho: correlación de rangos de Spearman\n")
+    print("rho: correlacion de rangos de Spearman\n")
 
-    # --- Guardar tabla estadística ---
-    df_stats = pd.DataFrame(stat_rows)
-    df_sp    = pd.DataFrame(spearman_rows)
-    df_stats.to_csv(STATS_PATH, index=False, sep=';', decimal=',')
+    # -- Kruskal-Wallis: 3 grupos (ciego / ojos cerrados / control) ------------
+    df_g['group3'] = df_g['subject'].apply(asignar_grupo3)
+
+    hdr_kw = (f"{'Test':<12} {'Tipo':<14} "
+              f"{'Med Cie':>8} {'Med Ojo':>8} {'Med Con':>8}  "
+              f"{'H':>7} {'p':>8} {'eps2':>6} {'sig':>4}   "
+              f"{'p Cie-Con':>9} {'p Ojo-Con':>9} {'p Cie-Ojo':>9}")
+    sep_kw = '-' * len(hdr_kw)
+    print(f"{'='*len(hdr_kw)}")
+    print("KRUSKAL-WALLIS  -  3 grupos (Ciegos / Ojos cerrados / Control)")
+    print("post-hoc: Mann-Whitney por pares con correccion de Bonferroni")
+    print(f"{'='*len(hdr_kw)}\n{hdr_kw}\n{sep_kw}")
+
+    kw_rows = []
+    for label, col_clin, col_inst in mw_info:
+        for tipo, col in [('Clinico', col_clin), ('Instrumental', col_inst)]:
+            if col is None or col not in df_g.columns:
+                continue
+            kw = kw_test(df_g, col)
+            ph = posthoc_pares(df_g, col)
+            print(
+                f"{label:<12} {tipo:<14} "
+                f"{fmt(kw['med_ciego']):>8} {fmt(kw['med_ojos']):>8} {fmt(kw['med_control']):>8}  "
+                f"{fmt(kw['H'],'.2f'):>7} {fmt(kw['p'],'.4f'):>8} {fmt(kw['eps2']):>6} {kw['sig']:>4}   "
+                f"{fmt(ph['ciego_vs_control'],'.4f'):>9} "
+                f"{fmt(ph['ojos_cerrados_vs_control'],'.4f'):>9} "
+                f"{fmt(ph['ciego_vs_ojos_cerrados'],'.4f'):>9}"
+            )
+            kw_rows.append(dict(Test=label, Tipo=tipo, Columna=col,
+                                **{k: kw[k] for k in kw if k != 'sig'},
+                                Sig_KW=kw['sig'], **ph))
+
+    print(sep_kw)
+    print("eps2 = epsilon cuadrado (tamano del efecto, 0-1). "
+          "p post-hoc ya ajustados por Bonferroni.\n")
+
+    # -- Guardar tablas estadisticas -------------------------------------------
+    pd.DataFrame(stat_rows).to_csv(STATS_PATH, index=False, sep=';', decimal=',')
     sp_path = STATS_PATH.replace('estadistica_MW', 'estadistica_Spearman')
-    df_sp.to_csv(sp_path, index=False, sep=';', decimal=',')
-    print(f"✓ Tabla MW guardada       → {STATS_PATH}")
-    print(f"✓ Tabla Spearman guardada → {sp_path}")
+    pd.DataFrame(spearman_rows).to_csv(sp_path, index=False, sep=';', decimal=',')
+    kw_path = STATS_PATH.replace('estadistica_MW', 'estadistica_KW')
+    pd.DataFrame(kw_rows).to_csv(kw_path, index=False, sep=';', decimal=',')
+    print(f"[OK] Tabla MW guardada       -> {STATS_PATH}")
+    print(f"[OK] Tabla Spearman guardada -> {sp_path}")
+    print(f"[OK] Tabla KW (3 grupos)     -> {kw_path}")
 
-    # ── Resumen scores instrumentales por sujeto ──────────────────────────────
-    show_cols = ['subject', 'group',
-                 'Inst_Test3_2', 'Inst_Test7_2', 'Inst_Test11_2', 'Inst_Score_Total']
-    show_cols = [c for c in show_cols if c in df_g.columns]
-    print("\nPuntuaciones instrumentales escaladas (0–2 por test, 0–6 total):")
-    print(df_g[show_cols].round(3).to_string(index=False))
+    # -- Resumen por sujeto ----------------------------------------------------
+    show = (['subject', 'group'] + [it[2] for it in ITEMS] +
+            ['Inst_Score_Total', 'Clin_Score_Total'])
+    show = [c for c in show if c in df_g.columns]
+    print("\nScores instrumentales escalados (0-2 por sub-ensayo, 0-12 total):")
+    print(df_g[show].round(3).to_string(index=False))
 
 
 if __name__ == '__main__':

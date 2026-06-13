@@ -197,6 +197,66 @@ def load_exceptions():
     return {}
 
 
+# =============================================================================
+# CONTROL DE CALIDAD Y REVISION MANUAL (un unico archivo)
+# =============================================================================
+# control_calidad.csv es el unico archivo de calidad. El script
+# 05_control_calidad.py rellena las columnas automaticas (senal_auto, motivo
+# auto, duracion...) y PRESERVA las columnas que edita el experto a mano:
+#   decision_manual : 'excluir' | 'recorte' | vacio
+#   trim_inicio_s, trim_fin_s : ventana de recorte manual (solo si 'recorte')
+# Es editable en Excel (sin tildes). Asi una sola tabla senala y decide, y la
+# exclusion queda revisada y reproducible.
+
+CONTROL_CALIDAD_PATH = r'C:\Users\marti\Desktop\TFG\results\control_calidad.csv'
+
+
+def load_manual_review():
+    """
+    Lee control_calidad.csv y devuelve un dict {(subject, test): info} con las
+    decisiones manuales. info: decision, trim_inicio_s, trim_fin_s.
+    Devuelve {} si el archivo no existe todavia.
+    """
+    if not os.path.exists(CONTROL_CALIDAD_PATH):
+        return {}
+    df = pd.read_csv(CONTROL_CALIDAD_PATH, sep=';', dtype=str).fillna('')
+    review = {}
+    for _, r in df.iterrows():
+        subj = str(r.get('subject', '')).strip().lower()
+        test = str(r.get('test', '')).strip()
+        if not subj or not test:
+            continue
+        review[(subj, test)] = dict(
+            decision      = str(r.get('decision_manual', '')).strip().lower(),
+            trim_inicio_s = str(r.get('trim_inicio_s', '')).strip(),
+            trim_fin_s    = str(r.get('trim_fin_s', '')).strip(),
+        )
+    return review
+
+
+def is_excluded(subject: str, test: str) -> bool:
+    """True si el ensayo esta marcado como 'excluir' en control_calidad.csv."""
+    info = load_manual_review().get((subject.lower(), test))
+    return info is not None and info['decision'] == 'excluir'
+
+
+def get_manual_trim(subject: str, test: str):
+    """
+    Si el ensayo tiene un recorte manual definido (decision_manual 'recorte'),
+    devuelve la tupla (inicio_s, fin_s); si no, devuelve None.
+    Se usa para ensayos cuyos pisotones el detector automatico no capta.
+    """
+    info = load_manual_review().get((subject.lower(), test))
+    if info is None or info['decision'] != 'recorte':
+        return None
+    try:
+        ini = float(info['trim_inicio_s'].replace(',', '.'))
+        fin = float(info['trim_fin_s'].replace(',', '.'))
+    except (ValueError, AttributeError):
+        return None
+    return (ini, fin)
+
+
 def detect_stomps(df: pd.DataFrame, fs: float = SAMPLING_RATE,
                   plot: bool = False, subject: str = '', test: str = '') -> tuple:
     """

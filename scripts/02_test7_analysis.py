@@ -20,7 +20,7 @@ if hasattr(sys.stdout, 'reconfigure'):
     sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 
 sys.path.append(r'C:\Users\marti\Desktop\TFG\scripts')
-from utils import ALL_SUBJECTS, SAMPLING_RATE, load_trimmed
+from utils import ALL_SUBJECTS, SAMPLING_RATE, load_trimmed, is_excluded
 
 RESULTS_PATH = r'C:\Users\marti\Desktop\TFG\results\resultados_globales.csv'
 FS = SAMPLING_RATE
@@ -141,6 +141,10 @@ def analyze_subject(subject):
     Carga, recorta y analiza el test7 de un sujeto.
     Devuelve un dict con features y scores, o None si el archivo no existe.
     """
+    if is_excluded(subject, 'test7'):
+        print(f"  [EXCLUIDO] {subject}/test7: marcado en revision manual")
+        return None
+
     try:
         df = load_trimmed(subject, 'test7')
     except FileNotFoundError:

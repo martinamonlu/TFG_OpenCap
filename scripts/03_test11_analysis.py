@@ -23,7 +23,7 @@ if hasattr(sys.stdout, 'reconfigure'):
 from scipy.signal import find_peaks
 
 sys.path.append(r'C:\Users\marti\Desktop\TFG\scripts')
-from utils import ALL_SUBJECTS, SAMPLING_RATE, load_trimmed
+from utils import ALL_SUBJECTS, SAMPLING_RATE, load_trimmed, is_excluded
 
 RESULTS_PATH = r'C:\Users\marti\Desktop\TFG\results\resultados_globales.csv'
 FS = SAMPLING_RATE
@@ -186,6 +186,10 @@ def analyze_subject(subject):
     Carga, recorta y analiza el test11 de un sujeto.
     Devuelve un dict con features y scores, o None si el archivo no existe.
     """
+    if is_excluded(subject, 'test11'):
+        print(f"  [EXCLUIDO] {subject}/test11: marcado en revision manual")
+        return None
+
     try:
         df = load_trimmed(subject, 'test11')
     except FileNotFoundError:
@@ -197,16 +201,6 @@ def analyze_subject(subject):
 
     T_total = float(df['time'].iloc[-1] - df['time'].iloc[0])
     print(f"  Duración ensayo: {T_total:.2f} s  ({len(df)} muestras)")
-
-    # Comprobar calidad de datos: rangos articulares clampeados a ±180° indican
-    # grabación corrupta (límite del modelo OpenSim)
-    for col in ['lumbar_bending', 'lumbar_extension', 'lumbar_rotation']:
-        if col in df.columns:
-            rng = float(df[col].max() - df[col].min())
-            if rng >= 179.0:
-                print(f"  [SKIP] {subject}/test11: columna '{col}' clampeada "
-                      f"(rango={rng:.1f}°) — grabación no válida")
-                return None
 
     # Detección de pasos
     step_idx, step_times, intervalos_paso = detect_steps(df)

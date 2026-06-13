@@ -18,7 +18,7 @@ import numpy as np
 import pandas as pd
 
 sys.path.append(r'C:\Users\marti\Desktop\TFG\scripts')
-from utils import ALL_SUBJECTS, SAMPLING_RATE, load_trimmed
+from utils import ALL_SUBJECTS, SAMPLING_RATE, load_trimmed, is_excluded
 
 RESULTS_PATH = r'C:\Users\marti\Desktop\TFG\results\resultados_globales.csv'
 FS = SAMPLING_RATE
@@ -168,6 +168,10 @@ def analyze_trial(subject, trial):
     Carga, recorta y analiza un ensayo de Test 3.
     Devuelve un dict con todas las features y scores, o None si el archivo no existe.
     """
+    if is_excluded(subject, trial):
+        print(f"  [EXCLUIDO] {subject}/{trial}: marcado en revision manual")
+        return None
+
     try:
         df = load_trimmed(subject, trial)
     except FileNotFoundError:

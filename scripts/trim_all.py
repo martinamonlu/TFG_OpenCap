@@ -33,6 +33,7 @@ SALIDA:
 
 import os
 import sys
+import numpy as np
 import pandas as pd
 
 if hasattr(sys.stdout, 'reconfigure'):
@@ -42,7 +43,7 @@ if hasattr(sys.stdout, 'reconfigure'):
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from utils import (ALL_SUBJECTS, ALL_TESTS, DATA_ROOT,
                    get_mot_path, load_mot, detect_stomps, detect_stomps_tug,
-                   trim_mot)
+                   trim_mot, get_manual_trim)
 
 
 # =============================================================================
@@ -144,10 +145,20 @@ def process_subject(subject: str, log_rows: list):
             # Cargar
             df = load_mot(filepath)
 
-            # Detectar pisotones — el TUG (test14) usa un detector específico
-            # (sin filtro de quietud, ver utils.detect_stomps_tug)
+            # Recorte manual (revision_manual.csv) tiene prioridad: para
+            # ensayos cuyos pisotones el detector automatico no capta.
+            manual = get_manual_trim(subject, test)
             is_tug = test.startswith('test14')
-            if is_tug:
+            if manual is not None:
+                ini_s, fin_s = manual
+                time_arr  = df['time'].values
+                idx_start = int(np.searchsorted(time_arr, ini_s))
+                idx_end   = int(min(np.searchsorted(time_arr, fin_s), len(df) - 1))
+                print(f"  [MANUAL] {subject}/{test}: recorte fijado a mano "
+                      f"{ini_s:.2f}s -> {fin_s:.2f}s")
+            elif is_tug:
+                # El TUG (test14) usa un detector especifico (sin filtro de
+                # quietud, ver utils.detect_stomps_tug)
                 idx_start, idx_end = detect_stomps_tug(
                     df, subject=subject, test=test)
             else:
@@ -158,7 +169,9 @@ def process_subject(subject: str, log_rows: list):
             time = df['time'].values
             duration = time[idx_end] - time[idx_start]
 
-            if idx_start == 0 and idx_end == len(df) - 1:
+            if manual is not None:
+                status = 'MANUAL'
+            elif idx_start == 0 and idx_end == len(df) - 1:
                 status = 'FALLIDO'
             elif idx_start == 0 or idx_end == len(df) - 1:
                 status = 'PARCIAL'
@@ -167,7 +180,7 @@ def process_subject(subject: str, log_rows: list):
 
             # Si la detección falló y el usuario quiere ver el plot, mostrarlo
             # (solo para el detector estándar; detect_stomps_tug no tiene plot)
-            if PLOT_ON_FAILURE and status != 'OK' and not is_tug:
+            if PLOT_ON_FAILURE and status not in ('OK', 'MANUAL') and not is_tug:
                 print(f"  [!] Mostrando gráfica de verificación para {subject}/{test}...")
                 detect_stomps(df, plot=True, subject=subject, test=test)
 
