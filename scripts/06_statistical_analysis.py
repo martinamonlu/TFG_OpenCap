@@ -186,10 +186,10 @@ def spearman_test(df, col_inst, col_clin):
 
 
 # -- Analisis de 3 grupos: Kruskal-Wallis + post-hoc --------------------------
-# Grupos: control (h01-h20), ciego (b01-b10), ojos_cerrados (b11-b20).
+# Grupos: control (h01-h20), disc_visual (b01-b11), ojos_cerrados (b12-b20).
 # El grupo de 20 "invidentes" del analisis de 2 grupos se desglosa aqui en
-# ciegos reales (privacion visual permanente) y videntes con ojos cerrados
-# (privacion visual simulada).
+# personas con discapacidad visual real (b01-b11, n=11) y videntes con ojos
+# cerrados que simulan la privacion visual (b12-b20, n=9).
 
 def asignar_grupo3(subject):
     s = str(subject).lower()
@@ -199,10 +199,10 @@ def asignar_grupo3(subject):
         n = int(s[1:])
     except ValueError:
         return ''
-    return 'ciego' if 1 <= n <= 10 else 'ojos_cerrados'
+    return 'disc_visual' if 1 <= n <= 11 else 'ojos_cerrados'
 
 
-GRUPOS3 = ['ciego', 'ojos_cerrados', 'control']
+GRUPOS3 = ['disc_visual', 'ojos_cerrados', 'control']
 
 
 def kw_test(df, col, group_col='group3'):
@@ -212,8 +212,8 @@ def kw_test(df, col, group_col='group3'):
     """
     samples = [df.loc[df[group_col] == g, col].dropna().values for g in GRUPOS3]
     ns = [int(len(s)) for s in samples]
-    out = dict(n_ciego=ns[0], n_ojos=ns[1], n_control=ns[2],
-               med_ciego=np.nan, med_ojos=np.nan, med_control=np.nan,
+    out = dict(n_dv=ns[0], n_ojos=ns[1], n_control=ns[2],
+               med_dv=np.nan, med_ojos=np.nan, med_control=np.nan,
                H=np.nan, p=np.nan, eps2=np.nan, sig='')
     if any(n < 2 for n in ns):
         return out
@@ -222,7 +222,7 @@ def kw_test(df, col, group_col='group3'):
     except ValueError:   # todos los valores identicos (p.ej. clinica constante)
         return out
     N = sum(ns)
-    out.update(med_ciego=float(np.median(samples[0])),
+    out.update(med_dv=float(np.median(samples[0])),
                med_ojos=float(np.median(samples[1])),
                med_control=float(np.median(samples[2])),
                H=float(H), p=float(p), eps2=float(H / (N - 1)),
@@ -236,8 +236,8 @@ def posthoc_pares(df, col, group_col='group3'):
     Post-hoc por pares (Mann-Whitney) con correccion de Bonferroni (3 pares).
     Devuelve dict {par: p_ajustado}.
     """
-    pares = [('ciego', 'control'), ('ojos_cerrados', 'control'),
-             ('ciego', 'ojos_cerrados')]
+    pares = [('disc_visual', 'control'), ('ojos_cerrados', 'control'),
+             ('disc_visual', 'ojos_cerrados')]
     res = {}
     for g1, g2 in pares:
         a = df.loc[df[group_col] == g1, col].dropna().values
@@ -360,12 +360,12 @@ def main():
     df_g['group3'] = df_g['subject'].apply(asignar_grupo3)
 
     hdr_kw = (f"{'Test':<12} {'Tipo':<14} "
-              f"{'Med Cie':>8} {'Med Ojo':>8} {'Med Con':>8}  "
+              f"{'Med DV':>8} {'Med Ojo':>8} {'Med Con':>8}  "
               f"{'H':>7} {'p':>8} {'eps2':>6} {'sig':>4}   "
-              f"{'p Cie-Con':>9} {'p Ojo-Con':>9} {'p Cie-Ojo':>9}")
+              f"{'p DV-Con':>9} {'p Ojo-Con':>9} {'p DV-Ojo':>9}")
     sep_kw = '-' * len(hdr_kw)
     print(f"{'='*len(hdr_kw)}")
-    print("KRUSKAL-WALLIS  -  3 grupos (Ciegos / Ojos cerrados / Control)")
+    print("KRUSKAL-WALLIS  -  3 grupos (Discapacidad visual / Ojos cerrados / Control)")
     print("post-hoc: Mann-Whitney por pares con correccion de Bonferroni")
     print(f"{'='*len(hdr_kw)}\n{hdr_kw}\n{sep_kw}")
 
@@ -378,11 +378,11 @@ def main():
             ph = posthoc_pares(df_g, col)
             print(
                 f"{label:<12} {tipo:<14} "
-                f"{fmt(kw['med_ciego']):>8} {fmt(kw['med_ojos']):>8} {fmt(kw['med_control']):>8}  "
+                f"{fmt(kw['med_dv']):>8} {fmt(kw['med_ojos']):>8} {fmt(kw['med_control']):>8}  "
                 f"{fmt(kw['H'],'.2f'):>7} {fmt(kw['p'],'.4f'):>8} {fmt(kw['eps2']):>6} {kw['sig']:>4}   "
-                f"{fmt(ph['ciego_vs_control'],'.4f'):>9} "
+                f"{fmt(ph['disc_visual_vs_control'],'.4f'):>9} "
                 f"{fmt(ph['ojos_cerrados_vs_control'],'.4f'):>9} "
-                f"{fmt(ph['ciego_vs_ojos_cerrados'],'.4f'):>9}"
+                f"{fmt(ph['disc_visual_vs_ojos_cerrados'],'.4f'):>9}"
             )
             kw_rows.append(dict(Test=label, Tipo=tipo, Columna=col,
                                 **{k: kw[k] for k in kw if k != 'sig'},

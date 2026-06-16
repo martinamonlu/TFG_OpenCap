@@ -5,6 +5,7 @@ Genera figuras en results/figuras/ a partir de:
   - resultados_globales.csv      (valores por sujeto)
   - estadistica_MW.csv           (p y r de Mann-Whitney, ya calculados en 06)
   - estadistica_Spearman.csv     (rho, p, n, ya calculados en 06)
+  - estadistica_KW.csv           (p y eps2 de Kruskal-Wallis, ya calculados en 06)
 
 Figuras:
   1. boxplots_subtests.png  - diagramas de caja VIP vs Control de los 6
@@ -32,8 +33,8 @@ FIG_DIR     = os.path.join(RESULTS_DIR, 'figuras')
 # Colores Okabe-Ito (seguros para daltonismo e impresion)
 COL_VIP    = '#E69F00'   # naranja  (Invidentes, 2 grupos)
 COL_CON    = '#0072B2'   # azul     (Control)
-COL_CIEGO  = '#D55E00'   # bermellon (Ciegos, 3 grupos)
-COL_OJOS   = '#009E73'   # verde     (Ojos cerrados, 3 grupos)
+COL_CIEGO  = '#E69F00'   # naranja  (Discapacidad visual, 3 grupos)
+COL_OJOS   = '#9467BD'   # morado   (Ojos cerrados, 3 grupos)
 
 # (etiqueta, col_instrumental, col_clinica)
 ITEMS = [
@@ -94,7 +95,7 @@ def grupo3(subject):
     if s.startswith('h'):
         return 'control'
     n = int(s[1:])
-    return 'ciego' if 1 <= n <= 10 else 'ojos_cerrados'
+    return 'disc_visual' if 1 <= n <= 11 else 'ojos_cerrados'
 
 
 def _jitter(n, w=0.12):
@@ -263,7 +264,7 @@ def fig_spearman(df, sp):
 # Figura 4: boxplots de 3 grupos (Ciegos / Ojos cerrados / Control)
 # ---------------------------------------------------------------------------
 
-G3 = [('ciego', COL_CIEGO, 'Ciegos'),
+G3 = [('disc_visual', COL_CIEGO, 'Discapacidad visual'),
       ('ojos_cerrados', COL_OJOS, 'Ojos cerrados'),
       ('control', COL_CON, 'Control')]
 
