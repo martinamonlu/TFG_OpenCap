@@ -6,3 +6,5 @@ results/
 session_ids.json
 Problemas.txt
 opencap-processing/
+*.xlsx
+*.png
