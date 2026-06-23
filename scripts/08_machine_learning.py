@@ -30,14 +30,16 @@ import matplotlib.pyplot as plt
 
 from sklearn.preprocessing import StandardScaler
 from sklearn.cluster import KMeans, AgglomerativeClustering
-from sklearn.metrics import silhouette_score, adjusted_rand_score
+from sklearn.metrics import (silhouette_score, adjusted_rand_score,
+                             confusion_matrix, roc_curve, auc,
+                             precision_recall_fscore_support, accuracy_score)
 from sklearn.decomposition import PCA
 from scipy.optimize import linear_sum_assignment
 from sklearn.linear_model import LogisticRegression, Ridge
 from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
 from sklearn.pipeline import Pipeline
 from sklearn.model_selection import (RepeatedStratifiedKFold, StratifiedKFold,
-                                     KFold, cross_val_score)
+                                     KFold, cross_val_score, cross_val_predict)
 
 if hasattr(sys.stdout, 'reconfigure'):
     sys.stdout.reconfigure(encoding='utf-8', errors='replace')
@@ -269,7 +271,7 @@ def clasificacion(df):
     ax.barh([FEAT_LABELS[i] for i in orden][::-1],
             [imp[i] for i in orden][::-1], color=COL_INV, edgecolor='black')
     ax.set_xlabel('Importancia (Random Forest)')
-    ax.set_title('Importancia de variables — clasificación invidente vs control')
+    ax.set_title('Importancia de variables — clasificación privados de visión vs control')
     ax.grid(axis='x', alpha=0.3)
     fig.tight_layout()
     fig.savefig(os.path.join(FIG_DIR, 'clasificacion_importancia.png'), dpi=200)
@@ -291,6 +293,85 @@ def clasificacion(df):
         acc = cross_val_score(pipe, X, y3, cv=cv3, scoring='accuracy')
         print(f"   {nombre:22} acc={acc.mean():.3f}+-{acc.std():.3f}")
     print("   (clases muy pequenas: 9 y 8 sujetos -> solo orientativo)")
+
+
+def clasificacion_metricas(df):
+    """
+    Metricas completas de la clasificacion 2 grupos (privado de vision vs
+    control) a partir de predicciones CROSS-VALIDADAS: matriz de confusion,
+    precision, recall, F1 y curva ROC. La probabilidad de cada sujeto se obtiene
+    promediando sus predicciones fuera de fold sobre 20 repeticiones de 5-fold.
+    """
+    print("\n" + "=" * 70)
+    print("METRICAS DE CLASIFICACION (2 grupos, predicciones cross-validadas)")
+    print("=" * 70)
+    X = df[FEATURES].values
+    y = (df['grupo2'] == 'invidente').astype(int).values   # 1 = privado de vision
+    modelos = {
+        'Regresion logistica': Pipeline([('sc', StandardScaler()),
+            ('clf', LogisticRegression(max_iter=2000, random_state=SEED))]),
+        'Random Forest': Pipeline([('sc', StandardScaler()),
+            ('clf', RandomForestClassifier(n_estimators=300, random_state=SEED))]),
+    }
+    display = {'Regresion logistica': 'Regresión logística', 'Random Forest': 'Random Forest'}
+    n_rep = 20
+
+    probas, resumen = {}, []
+    for nombre, pipe in modelos.items():
+        p = np.zeros(len(y))
+        for r in range(n_rep):
+            skf = StratifiedKFold(5, shuffle=True, random_state=r)
+            p += cross_val_predict(pipe, X, y, cv=skf, method='predict_proba')[:, 1]
+        p /= n_rep
+        probas[nombre] = p
+        pred = (p >= 0.5).astype(int)
+        acc = accuracy_score(y, pred)
+        prec, rec, f1, _ = precision_recall_fscore_support(
+            y, pred, average='binary', zero_division=0)
+        a = auc(*roc_curve(y, p)[:2])
+        print(f"  {nombre:22} acc={acc:.3f}  precision={prec:.3f}  "
+              f"recall={rec:.3f}  F1={f1:.3f}  AUC={a:.3f}")
+        resumen.append(dict(modelo=nombre, accuracy=round(acc, 3),
+                            precision=round(prec, 3), recall=round(rec, 3),
+                            f1=round(f1, 3), auc=round(a, 3)))
+    pd.DataFrame(resumen).to_csv(os.path.join(RESULTS_DIR, 'clasificacion_metricas.csv'),
+                                 index=False, sep=';', decimal=',')
+
+    # --- Matriz de confusion (modelo principal: logistica) ---
+    pred_lr = (probas['Regresion logistica'] >= 0.5).astype(int)
+    cm = confusion_matrix(y, pred_lr)               # filas=real, columnas=predicho
+    fig, ax = plt.subplots(figsize=(5, 4.6))
+    ax.imshow(cm, cmap='Blues')
+    ax.set_xticks([0, 1]); ax.set_yticks([0, 1])
+    ax.set_xticklabels(['Control', 'Privado de visión'])
+    ax.set_yticklabels(['Control', 'Privado de visión'], rotation=90, va='center')
+    ax.set_xlabel('Predicción'); ax.set_ylabel('Real')
+    vmax = cm.max()
+    for i in range(2):
+        for j in range(2):
+            ax.text(j, i, int(cm[i, j]), ha='center', va='center', fontsize=16,
+                    color='white' if cm[i, j] > vmax / 2 else 'black')
+    ax.set_title('Matriz de confusión — regresión logística (CV)')
+    fig.tight_layout()
+    out_cm = os.path.join(FIG_DIR, 'clasificacion_matriz_confusion.png')
+    fig.savefig(out_cm, dpi=200); plt.close(fig)
+
+    # --- Curva ROC (ambos modelos) ---
+    fig, ax = plt.subplots(figsize=(5.6, 5))
+    for nombre, color in [('Regresion logistica', COL_DV), ('Random Forest', COL_CON)]:
+        fpr, tpr, _ = roc_curve(y, probas[nombre])
+        ax.plot(fpr, tpr, color=color, lw=2,
+                label=f'{display[nombre]} (AUC = {auc(fpr, tpr):.2f})')
+    ax.plot([0, 1], [0, 1], ls='--', color='gray', lw=1, label='Azar')
+    ax.set_xlabel('1 − especificidad (FPR)')
+    ax.set_ylabel('Sensibilidad (TPR)')
+    ax.set_title('Curva ROC — privado de visión vs. control')
+    ax.legend(loc='lower right', fontsize=9); ax.grid(alpha=0.25)
+    fig.tight_layout()
+    out_roc = os.path.join(FIG_DIR, 'clasificacion_roc.png')
+    fig.savefig(out_roc, dpi=200); plt.close(fig)
+    print(f"  Figuras: {os.path.basename(out_cm)}, {os.path.basename(out_roc)}")
+    print("  Tabla -> clasificacion_metricas.csv")
 
 
 # ===========================================================================
@@ -325,6 +406,7 @@ def main():
     df = cargar()
     clustering(df)
     clasificacion(df)
+    clasificacion_metricas(df)
     regresion(df)
     print("\n" + "=" * 70)
     print("Hecho. Recuerda: n pequeno -> resultados orientativos, no confirmatorios.")

@@ -53,24 +53,31 @@ def fmt_p(p):
     return 'p < 0.001' if p < 0.001 else f'p = {p:.3f}'
 
 
+def simb(efn):
+    """Nombre del tamano del efecto como simbolo para las graficas."""
+    return {'eta2': 'η²', 'epsilon2': 'ε²',
+            'Cohen d': 'd', 'Rosenthal r': 'r'}.get(efn, efn)
+
+
 def cargar():
     df = pd.read_csv(os.path.join(RESULTS_DIR, 'resultados_globales.csv'),
                      sep=';', decimal=',')
-    mw = pd.read_csv(os.path.join(RESULTS_DIR, 'estadistica_MW.csv'),
+    g2 = pd.read_csv(os.path.join(RESULTS_DIR, 'estadistica_2grupos.csv'),
                      sep=';', decimal=',')
     sp = pd.read_csv(os.path.join(RESULTS_DIR, 'estadistica_Spearman.csv'),
                      sep=';', decimal=',')
-    kw = pd.read_csv(os.path.join(RESULTS_DIR, 'estadistica_KW.csv'),
+    g3 = pd.read_csv(os.path.join(RESULTS_DIR, 'estadistica_3grupos.csv'),
                      sep=';', decimal=',')
-    return df, mw, sp, kw
+    return df, g2, sp, g3
 
 
-def get_mw(mw, label):
-    """Devuelve (p, r) del Mann-Whitney instrumental de un test."""
-    row = mw[(mw['Test'] == label) & (mw['Tipo'] == 'Instrumental')]
+def get_2g(g2, label):
+    """(p, effect, effect_name) instrumental del analisis de 2 grupos."""
+    row = g2[(g2['Test'] == label) & (g2['Tipo'] == 'Instrumental')]
     if len(row):
-        return float(row['p'].iloc[0]), float(row['r'].iloc[0])
-    return np.nan, np.nan
+        return (float(row['p'].iloc[0]), float(row['effect'].iloc[0]),
+                str(row['effect_name'].iloc[0]))
+    return np.nan, np.nan, ''
 
 
 def get_sp(sp, label):
@@ -82,12 +89,15 @@ def get_sp(sp, label):
     return np.nan, np.nan, 0
 
 
-def get_kw(kw, label):
-    """Devuelve (p, eps2) del Kruskal-Wallis instrumental de un test."""
-    row = kw[(kw['Test'] == label) & (kw['Tipo'] == 'Instrumental')]
+def get_3g(g3, label):
+    """(p, effect, effect_name, posthoc_dict) instrumental del analisis de 3 grupos."""
+    row = g3[(g3['Test'] == label) & (g3['Tipo'] == 'Instrumental')]
     if len(row):
-        return float(row['p'].iloc[0]), float(row['eps2'].iloc[0])
-    return np.nan, np.nan
+        ph = {k.replace('posthoc_', ''): float(row[k].iloc[0])
+              for k in row.columns if k.startswith('posthoc_')}
+        return (float(row['p'].iloc[0]), float(row['effect'].iloc[0]),
+                str(row['effect_name'].iloc[0]), ph)
+    return np.nan, np.nan, '', {}
 
 
 def grupo3(subject):
@@ -101,6 +111,18 @@ def grupo3(subject):
 def _jitter(n, w=0.12):
     return np.random.uniform(-w, w, n)
 
+
+def _bracket(ax, x1, x2, y, p, h):
+    """Dibuja una llave horizontal entre dos cajas con el p-valor encima."""
+    ax.plot([x1, x1, x2, x2], [y, y + h, y + h, y], lw=1.0, color='0.3')
+    txt = 'p<0.001' if p < 0.001 else f'p={p:.3f}'
+    ax.text((x1 + x2) / 2, y + h, txt, ha='center', va='bottom', fontsize=6.5)
+
+
+# Indice de columna de cada grupo dentro de un test (orden de G3) para las llaves
+PAR_IDX = {'disc_visual_vs_control': (0, 2),
+           'ojos_cerrados_vs_control': (1, 2),
+           'disc_visual_vs_ojos_cerrados': (0, 1)}
 
 # ---------------------------------------------------------------------------
 # Figura 1: boxplots de los 6 sub-ensayos instrumentales
@@ -124,22 +146,22 @@ def fig_boxplots_subtests(df, mw):
             ax.scatter(x + _jitter(len(data)), data, s=18, color=color,
                        edgecolor='black', linewidth=0.3, alpha=0.8, zorder=3)
 
-        # Anotacion: p exacto + r encima del par
-        p, r = get_mw(mw, lab)
+        # Anotacion: p exacto + tamano del efecto encima del par
+        p, ef, efn = get_2g(mw, lab)
         ymax = max(a.max() if len(a) else 0, b.max() if len(b) else 0)
         ytxt = ymax + 0.18
         ax.plot([x_vip, x_con], [ytxt - 0.04, ytxt - 0.04], color='gray', lw=0.8)
-        ax.text((x_vip + x_con) / 2, ytxt, f'{fmt_p(p)}\nr = {r:.2f}',
+        ax.text((x_vip + x_con) / 2, ytxt, f'{fmt_p(p)}\n{efn} = {ef:.2f}',
                 ha='center', va='bottom', fontsize=8)
 
     ax.set_xticks([i * paso + 1.1 for i in range(len(ITEMS))])
     ax.set_xticklabels([it[0] for it in ITEMS])
     ax.set_ylabel('Puntuación instrumental (escala 0–2)')
     ax.set_ylim(-0.1, 2.6)
-    ax.set_title('Comparación Invidentes vs. Control por sub-ensayo (Mann-Whitney U)')
+    ax.set_title('Comparación Privados de visión vs. Control por sub-ensayo (Mann-Whitney U)')
     ax.grid(axis='y', alpha=0.25)
 
-    handles = [plt.Line2D([0], [0], marker='s', color='w', label='Invidentes',
+    handles = [plt.Line2D([0], [0], marker='s', color='w', label='Privados de visión',
                           markerfacecolor=COL_VIP, markersize=10),
                plt.Line2D([0], [0], marker='s', color='w', label='Control',
                           markerfacecolor=COL_CON, markersize=10)]
@@ -176,23 +198,23 @@ def fig_boxplot_total(df, mw):
             ax.scatter(x + _jitter(len(data)), data, s=20, color=color,
                        edgecolor='black', linewidth=0.3, alpha=0.8, zorder=3)
 
-        label_mw = 'Total 0-12'
         tipo = 'Instrumental' if 'instrumental' in lab else 'Clinico'
-        row = mw[(mw['Test'] == label_mw) & (mw['Tipo'] == tipo)]
+        row = mw[(mw['Test'] == 'Total 0-12') & (mw['Tipo'] == tipo)]
         if len(row):
-            p, r = float(row['p'].iloc[0]), float(row['r'].iloc[0])
+            p = float(row['p'].iloc[0]); ef = float(row['effect'].iloc[0])
+            efn = str(row['effect_name'].iloc[0])
             ymax = max(a.max() if len(a) else 0, b.max() if len(b) else 0)
             ax.plot([x_vip, x_con], [ymax + 0.5, ymax + 0.5], color='gray', lw=0.8)
-            ax.text((x_vip + x_con) / 2, ymax + 0.7, f'{fmt_p(p)}\nr = {r:.2f}',
+            ax.text((x_vip + x_con) / 2, ymax + 0.7, f'{fmt_p(p)}\n{efn} = {ef:.2f}',
                     ha='center', va='bottom', fontsize=9)
 
     ax.set_xticks([1.1, 3.6])
     ax.set_xticklabels([b[0] for b in bloques])
     ax.set_ylabel('Puntuación Total (escala 0–12)')
     ax.set_ylim(0, 14.5)
-    ax.set_title('Score Total Invidentes vs. Control (Mann-Whitney U)', pad=16)
+    ax.set_title('Score Total Privados de visión vs. Control (Mann-Whitney U)', pad=16)
     ax.grid(axis='y', alpha=0.25)
-    handles = [plt.Line2D([0], [0], marker='s', color='w', label='Invidentes',
+    handles = [plt.Line2D([0], [0], marker='s', color='w', label='Privados de visión',
                           markerfacecolor=COL_VIP, markersize=10),
                plt.Line2D([0], [0], marker='s', color='w', label='Control',
                           markerfacecolor=COL_CON, markersize=10)]
@@ -296,16 +318,18 @@ def fig_boxplots_3grupos(df, kw):
                        edgecolor='black', linewidth=0.3, alpha=0.8, zorder=3)
             ymax = max(ymax, data.max() if len(data) else 0)
 
-        p, eps2 = get_kw(kw, lab)
+        # Solo el contraste global (p + tamano del efecto). El detalle por pares
+        # (post-hoc) va en la figura del total y en estadistica_3grupos.csv.
+        p, ef, efn, ph = get_3g(kw, lab)
         xc = i * paso + 0.6 + 0.7
-        ax.text(xc, ymax + 0.16, f'KW {fmt_p(p)}\nε² = {eps2:.2f}',
+        ax.text(xc, ymax + 0.14, f'{fmt_p(p)}\n{simb(efn)} = {ef:.2f}',
                 ha='center', va='bottom', fontsize=8)
 
     ax.set_xticks([i * paso + 1.3 for i in range(len(ITEMS))])
     ax.set_xticklabels([it[0] for it in ITEMS])
     ax.set_ylabel('Puntuación instrumental (escala 0–2)')
-    ax.set_ylim(-0.1, 2.7)
-    ax.set_title('Comparación de 3 grupos por sub-ensayo (Kruskal-Wallis)')
+    ax.set_ylim(-0.1, 2.8)
+    ax.set_title('Comparación de 3 grupos por sub-ensayo (ANOVA o Kruskal-Wallis)')
     ax.grid(axis='y', alpha=0.25)
     _leyenda_g3(ax)
     fig.tight_layout()
@@ -332,19 +356,107 @@ def fig_boxplot_total_3grupos(df, kw):
                    edgecolor='black', linewidth=0.3, alpha=0.8, zorder=3)
         ymax = max(ymax, data.max() if len(data) else 0)
 
-    p, eps2 = get_kw(kw, 'Total 0-12')
-    ax.text(1 + 0.9, ymax + 0.6, f'Kruskal-Wallis {fmt_p(p)}   ε² = {eps2:.2f}',
+    p, ef, efn, ph = get_3g(kw, 'Total 0-12')
+    ax.text(1 + 0.9, ymax + 0.4, f'{fmt_p(p)}   {simb(efn)} = {ef:.2f}',
             ha='center', va='bottom', fontsize=10)
+    # Llaves para los pares post-hoc significativos
+    sig = sorted([(k, v) for k, v in ph.items()
+                  if not np.isnan(v) and v < 0.05], key=lambda kv: kv[1])
+    ylev = ymax + 1.4
+    for k, v in sig:
+        ja, jb = PAR_IDX[k]
+        _bracket(ax, 1 + ja * 0.9, 1 + jb * 0.9, ylev, v, h=0.25)
+        ylev += 1.1
+
     ax.set_xticks([1 + j * 0.9 for j in range(3)])
     ax.set_xticklabels([nom for _g, _c, nom in G3])
     ax.set_ylabel('Puntuación Total instrumental (escala 0–12)')
-    ax.set_ylim(0, 13.5)
-    ax.set_title('Score Total: 3 grupos (Kruskal-Wallis)', pad=14)
+    ax.set_ylim(0, 15.5)
+    ax.set_title('Score Total: 3 grupos (ANOVA o Kruskal-Wallis)', pad=14)
     ax.grid(axis='y', alpha=0.25)
     fig.tight_layout()
     out = os.path.join(FIG_DIR, 'boxplot_total_3grupos.png')
     fig.savefig(out, dpi=200)
     plt.close(fig)
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Features biomecanicas en bruto: tabla descriptiva + histogramas
+# ---------------------------------------------------------------------------
+# Seleccion representativa de features por test (las que alimentan los
+# mecanismos discriminantes). (columna, etiqueta con unidad)
+FEATURES_DESC = [
+    ('T3A_RMS_ML_mm',            'Test 3 · oscilación ML del CoM (mm)'),
+    ('T3A_Ratio_Tobillo_Cadera', 'Test 3 · ratio tobillo-cadera'),
+    ('T3A_Duracion_s',           'Test 3 · tiempo de apoyo (s)'),
+    ('T7_RMS_ML_mm',             'Test 7 · oscilación ML del CoM (mm)'),
+    ('T7_Ratio_Tobillo_Cadera',  'Test 7 · ratio tobillo-cadera'),
+    ('T11_Cadencia_pasos_min',   'Test 11 · cadencia (pasos/min)'),
+    ('T11_CV_Cadencia_pct',      'Test 11 · CV de la cadencia (%)'),
+    ('T11_Desv_Lateral_RMS_mm',  'Test 11 · desviación lateral (mm)'),
+    ('T14_1_T_Total_s',          'Test 14-1 · tiempo total TUG (s)'),
+    ('T14_1_Desv_Lateral_RMS_mm','Test 14-1 · desviación lateral (mm)'),
+]
+
+
+def _med_iqr(x):
+    x = x.dropna()
+    if len(x) == 0:
+        return '-'
+    return f"{x.median():.2f} [{x.quantile(.25):.2f}–{x.quantile(.75):.2f}]"
+
+
+def tabla_features(df):
+    """Tabla descriptiva (mediana [IQR] por grupo + rango global)."""
+    g = np.where(df['subject'].str.startswith('h'), 'control', 'invidente')
+    filas = []
+    for col, lab in FEATURES_DESC:
+        if col not in df.columns:
+            continue
+        inv = df.loc[g == 'invidente', col]
+        con = df.loc[g == 'control', col]
+        glob = df[col].dropna()
+        filas.append(dict(
+            feature=lab,
+            privados_vision=_med_iqr(inv), control=_med_iqr(con),
+            rango_global=f"{glob.min():.2f} – {glob.max():.2f}" if len(glob) else '-'))
+    tab = pd.DataFrame(filas)
+    tab.to_csv(os.path.join(RESULTS_DIR, 'features_descriptivas.csv'),
+               index=False, sep=';', decimal=',')
+    print('\nFeatures (mediana [IQR] por grupo):')
+    print(tab.to_string(index=False))
+    return tab
+
+
+def fig_histogramas(df):
+    """Histogramas de las features representativas, por grupo."""
+    g = np.where(df['subject'].str.startswith('h'), 'control', 'invidente')
+    cols = [c for c, _ in FEATURES_DESC if c in df.columns]
+    ncol = 3
+    nrow = int(np.ceil(len(cols) / ncol))
+    fig, axes = plt.subplots(nrow, ncol, figsize=(12, 3.2 * nrow))
+    axes = axes.flatten()
+    for k, (col, lab) in enumerate([(c, l) for c, l in FEATURES_DESC if c in df.columns]):
+        ax = axes[k]
+        x = df[col].dropna()
+        bins = np.linspace(x.min(), x.max(), 9)
+        ax.hist(df.loc[g == 'invidente', col].dropna(), bins=bins, color=COL_VIP,
+                alpha=0.6, label='Privados de visión', edgecolor='white', linewidth=0.4)
+        ax.hist(df.loc[g == 'control', col].dropna(), bins=bins, color=COL_CON,
+                alpha=0.6, label='Control', edgecolor='white', linewidth=0.4)
+        ax.set_title(lab, fontsize=9.5)
+        ax.set_ylabel('nº sujetos', fontsize=8)
+        ax.tick_params(labelsize=8)
+        ax.grid(axis='y', alpha=0.2)
+    for j in range(len(cols), len(axes)):
+        axes[j].axis('off')
+    axes[0].legend(fontsize=8, framealpha=0.9)
+    fig.suptitle('Distribución de las características biomecánicas por grupo',
+                 fontsize=13)
+    fig.tight_layout(rect=[0, 0, 1, 0.97])
+    out = os.path.join(FIG_DIR, 'features_histogramas.png')
+    fig.savefig(out, dpi=200); plt.close(fig)
     return out
 
 
@@ -357,8 +469,10 @@ def main():
         fig_spearman(df, sp),
         fig_boxplots_3grupos(df, kw),
         fig_boxplot_total_3grupos(df, kw),
+        fig_histogramas(df),
     ]
-    print('Figuras guardadas en', FIG_DIR)
+    tabla_features(df)
+    print('\nFiguras guardadas en', FIG_DIR)
     for p in salidas:
         print('  ', os.path.basename(p))
 
